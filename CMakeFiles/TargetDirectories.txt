@@ -1,0 +1,3 @@
+/home/daniel957569/lol/CMakeFiles/clox.dir
+/home/daniel957569/lol/CMakeFiles/edit_cache.dir
+/home/daniel957569/lol/CMakeFiles/rebuild_cache.dir

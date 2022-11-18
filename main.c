@@ -2,6 +2,7 @@
 #include "common.h"
 #include "debug.h"
 #include "vm.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

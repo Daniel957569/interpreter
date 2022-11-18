@@ -69,10 +69,22 @@ static Value fgetsNative(int argCount, Value *args) {
   return OBJ_VAL(copyString(input, i - 1));
 }
 
+static Value arrSize(int argCount, Value *args) {
+  if (argCount != 1) {
+    runtimeError("'arrSize' function takes 1 argument");
+  }
+  if (!isObjType(*args, OBJ_ARRAY)) {
+    runtimeError("'arrSize' takes only array object");
+  }
+
+  return NUMBER_VAL(AS_ARRAY(*args)->array.count);
+}
+
 static void resetStack() {
   vm.stackTop = vm.stack;
   vm.frameCount = 0;
   vm.objects = NULL;
+  vm.openUpvalues = NULL;
   initTable(&vm.strings);
   initTable(&vm.globals);
 }
@@ -91,7 +103,7 @@ static void runtimeError(const char *format, ...) {
 
   for (int i = vm.frameCount - 1; i >= 0; i--) {
     CallFrame *frame = &vm.frames[i];
-    ObjFunction *function = frame->function;
+    ObjFunction *function = frame->closure->function;
     size_t instruction = frame->ip - function->chunk.code - 1;
     fprintf(stderr, "[line %d] in ", function->chunk.lines[instruction]);
     if (function->name == NULL) {
@@ -119,6 +131,7 @@ void initVM() {
   defineNative("range", rangeNative);
   defineNative("fgets", fgetsNative);
   defineNative("sqrt", sqrtNative);
+  defineNative("arrSize", arrSize);
 }
 
 void freeVM() {
@@ -129,11 +142,10 @@ void freeVM() {
 
 static Value peek(int distance) { return vm.stackTop[-1 - distance]; }
 
-static bool call(ObjFunction *function, int argCount) {
-  if (argCount != function->arity) {
-    runtimeError("Expected %d arguments but got %d.", function->arity,
+static bool call(ObjClosure *closure, int argCount) {
+  if (argCount != closure->function->arity) {
+    runtimeError("Expected %d arguments but got %d.", closure->function->arity,
                  argCount);
-    return false;
   }
 
   if (vm.frameCount == FRAMES_MAX) {
@@ -142,8 +154,8 @@ static bool call(ObjFunction *function, int argCount) {
   }
 
   CallFrame *frame = &vm.frames[vm.frameCount++];
-  frame->function = function;
-  frame->ip = function->chunk.code;
+  frame->closure = closure;
+  frame->ip = closure->function->chunk.code;
   frame->slots = vm.stackTop - argCount - 1;
   return true;
 }
@@ -151,8 +163,6 @@ static bool call(ObjFunction *function, int argCount) {
 static bool callValue(Value callee, int argCount) {
   if (IS_OBJ(callee)) {
     switch (OBJ_TYPE(callee)) {
-    case OBJ_FUNCTION:
-      return call(AS_FUNCTION(callee), argCount);
     case OBJ_NATIVE: {
       NativeFn native = AS_NATIVE(callee);
       Value result = native(argCount, vm.stackTop - argCount);
@@ -160,12 +170,42 @@ static bool callValue(Value callee, int argCount) {
       push(result);
       return true;
     }
+    case OBJ_CLOSURE:
+      return call(AS_CLOSURE(callee), argCount);
     default:
       break; // Non-callable object type.
     }
   }
   runtimeError("Can only call functions and classes.");
   return false;
+}
+
+static ObjUpvalue *captureUpvalue(Value *local) {
+  ObjUpvalue *prevUpvalue = NULL;
+  ObjUpvalue *upvalue = vm.openUpvalues;
+  while (upvalue != NULL && upvalue->location > local) {
+    prevUpvalue = upvalue;
+    upvalue = upvalue->next;
+  }
+  if (upvalue != NULL && upvalue->location == local) {
+    return upvalue;
+  }
+  ObjUpvalue *createdUpvalue = newUpvalue(local);
+  if (prevUpvalue == NULL) {
+    vm.openUpvalues = createdUpvalue;
+  } else {
+    prevUpvalue->next = createdUpvalue;
+  }
+  return createdUpvalue;
+}
+
+static void closeUpvalues(Value *last) {
+  while (vm.openUpvalues != NULL && vm.openUpvalues->location >= last) {
+    ObjUpvalue *upvalue = vm.openUpvalues;
+    upvalue->closed = *upvalue->location;
+    upvalue->location = &upvalue->closed;
+    vm.openUpvalues = upvalue->next;
+  }
 }
 
 void push(Value value) {
@@ -204,8 +244,11 @@ static InterpretResult run() {
 #define READ_SHORT()                                                           \
   (frame->ip += 2, (uint16_t)((frame->ip[-2] << 8) | frame->ip[-1]))
 
-#define READ_CONSTANT() (frame->function->chunk.constants.values[READ_BYTE()])
+#define READ_CONSTANT()                                                        \
+  (frame->closure->function->chunk.constants.values[READ_BYTE()])
+
 #define READ_STRING() AS_STRING(READ_CONSTANT())
+
 #define BINARY_OP(valueType, op)                                               \
   do {                                                                         \
     if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {                          \
@@ -239,6 +282,7 @@ static InterpretResult run() {
     }
     case OP_RETURN: {
       Value result = pop();
+      closeUpvalues(frame->slots);
       vm.frameCount--;
       if (vm.frameCount == 0) {
         pop();
@@ -360,10 +404,56 @@ static InterpretResult run() {
       push(frame->slots[slot]);
       break;
     }
-
     case OP_SET_LOCAL: {
       uint8_t slot = READ_BYTE();
       frame->slots[slot] = peek(0);
+      break;
+    }
+    case OP_SET_ARRAY_LOCAL: {
+      uint8_t slot = READ_BYTE();
+      Value value = pop();
+      int offest = AS_NUMBER(peek(0));
+      ValueArray *array = &AS_ARRAY(frame->slots[slot])->array;
+      if (array->count < offest)
+        runtimeError("index array is bigger than array size");
+      if (offest == array->count)
+        writeValueArray(array, value);
+      else
+        array->values[offest] = value;
+
+      break;
+    }
+    case OP_SET_ARRAY_GLOBAL: {
+      ObjString *name = READ_STRING();
+      Value val = pop();
+      int offest = AS_NUMBER(peek(0));
+      printf("index: %d\n", offest);
+      printValue(val);
+      printf("\n");
+      printf("%s\n", name->chars);
+      Value value;
+      tableGet(&vm.globals, name, &value);
+      ValueArray *array = &AS_ARRAY(value)->array;
+      if (array->count < offest)
+        runtimeError("index array is bigger than array size");
+      if (offest == array->count)
+        writeValueArray(array, val);
+      else
+        array->values[offest] = val;
+
+      printf("%d\n", AS_ARRAY(value)->array.count);
+      Kind err = tableSetVariable(&vm.globals, name, value, NONE, 1);
+      if (err == UNASSINGABLE) {
+        tableDelete(&vm.globals, name);
+        runtimeError("Cannot mutate constant variable '%s'.", name->chars);
+        return INTERPRET_RUNTIME_ERROR;
+      } else if (err == UNDEFINED) {
+        tableDelete(&vm.globals, name);
+        runtimeError("Undefined variable '%s'.", name->chars);
+        return INTERPRET_RUNTIME_ERROR;
+      } else {
+        break;
+      }
       break;
     }
     case OP_JUMP: {
@@ -413,6 +503,73 @@ static InterpretResult run() {
       frame = &vm.frames[vm.frameCount - 1];
       break;
     }
+    case OP_CLOSURE: {
+      ObjFunction *function = AS_FUNCTION(READ_CONSTANT());
+      ObjClosure *closure = newClosure(function);
+      push(OBJ_VAL(closure));
+      for (int i = 0; i < closure->upvalueCount; i++) {
+        uint8_t isLocal = READ_BYTE();
+        uint8_t index = READ_BYTE();
+        if (isLocal) {
+          closure->upvalues[i] = captureUpvalue(frame->slots + index);
+        } else {
+          closure->upvalues[i] = frame->closure->upvalues[index];
+        }
+      }
+      break;
+    }
+    case OP_GET_UPVALUE: {
+      uint8_t slot = READ_BYTE();
+      push(*frame->closure->upvalues[slot]->location);
+      break;
+    }
+    case OP_SET_UPVALUE: {
+      uint8_t slot = READ_BYTE();
+      Value value = peek(0);
+      if (IS_ARRAY(*frame->closure->upvalues[slot]->location)) {
+        int index = AS_NUMBER(peek(1));
+        printValue(AS_ARRAY(*frame->closure->upvalues[slot]->location)
+                       ->array.values[index - 1]);
+        printf("dsdsds\n");
+        printf("%d\n", index);
+        AS_ARRAY(*frame->closure->upvalues[slot]->location)
+            ->array.values[index - 1] = value;
+        pop();
+      } else {
+        *frame->closure->upvalues[slot]->location = value;
+      }
+      break;
+    }
+    case OP_CLOSE_UPVALUE:
+      closeUpvalues(vm.stackTop - 1);
+      pop();
+      break;
+    case OP_INDEX_LOCAL: {
+      uint8_t slot = READ_BYTE();
+      int index = AS_NUMBER(pop());
+      ObjArray *array = AS_ARRAY(frame->slots[slot]);
+      if (index >= array->array.count) {
+        runtimeError("Index is bigger than array size");
+        return INTERPRET_RUNTIME_ERROR;
+      }
+      push(AS_ARRAY(frame->slots[slot])->array.values[index]);
+      break;
+    }
+    case OP_INDEX_GLOBAL: {
+      uint8_t index = AS_NUMBER(pop());
+      ObjString *name = READ_STRING();
+      Value value;
+      if (!tableGet(&vm.globals, name, &value)) {
+        runtimeError("Undefined variable '%s'.", name->chars);
+        return INTERPRET_RUNTIME_ERROR;
+      }
+      ValueArray arr = AS_ARRAY(value)->array;
+      for (int i = 0; i < arr.count; i++) {
+        printValue(arr.values[i]);
+      }
+      push(AS_ARRAY(value)->array.values[index]);
+      break;
+    }
     }
   }
 
@@ -429,7 +586,10 @@ InterpretResult interpret(const char *source) {
     return INTERPRET_COMPILE_ERROR;
 
   push(OBJ_VAL(function));
-  call(function, 0);
+  ObjClosure *closure = newClosure(function);
+  pop();
+  push(OBJ_VAL(closure));
+  call(closure, 0);
 
   return run();
 }

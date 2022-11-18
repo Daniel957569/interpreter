@@ -28,9 +28,32 @@ static ObjString *allocateString(char *chars, int length, uint32_t hash) {
   return string;
 }
 
+ObjUpvalue *newUpvalue(Value *slot) {
+  ObjUpvalue *upvalue = ALLOCATE_OBJ(ObjUpvalue, OBJ_UPVALUE);
+  upvalue->location = slot;
+  upvalue->next = NULL;
+  upvalue->closed = NIL_VAL;
+  return upvalue;
+}
+
+ObjClosure *newClosure(ObjFunction *function) {
+  ObjClosure *closure = ALLOCATE_OBJ(ObjClosure, OBJ_CLOSURE);
+
+  ObjUpvalue **upvalues = ALLOCATE(ObjUpvalue *, function->upvalueCount);
+  for (int i = 0; i < function->upvalueCount; i++) {
+    upvalues[i] = NULL;
+  }
+
+  closure->function = function;
+  closure->upvalues = upvalues;
+  closure->upvalueCount = function->upvalueCount;
+  return closure;
+}
+
 ObjFunction *newFunction() {
   ObjFunction *function = ALLOCATE_OBJ(ObjFunction, OBJ_FUNCTION);
   function->arity = 0;
+  function->upvalueCount = 0;
   function->name = NULL;
   initChunk(&function->chunk);
   return function;
@@ -40,6 +63,12 @@ ObjNative *newNative(NativeFn function) {
   ObjNative *native = ALLOCATE_OBJ(ObjNative, OBJ_NATIVE);
   native->function = function;
   return native;
+}
+
+ObjArray *newArray(ValueArray valueArray) {
+  ObjArray *objArray = ALLOCATE_OBJ(ObjArray, OBJ_ARRAY);
+  objArray->array = valueArray;
+  return objArray;
 }
 
 static uint32_t hashString(const char *key, int length) {
@@ -81,6 +110,16 @@ void printFunction(ObjFunction *function) {
   printf("<fn %s>", function->name->chars);
 }
 
+void printArray(ValueArray *array) {
+  printf("[");
+  for (int i = 0; i < array->count; i++) {
+    printValue(array->values[i]);
+    if (i != array->count - 1)
+      printf(",");
+  }
+  printf("]");
+}
+
 void printObject(Value value) {
   switch (OBJ_TYPE(value)) {
   case OBJ_STRING:
@@ -91,6 +130,15 @@ void printObject(Value value) {
     break;
   case OBJ_NATIVE:
     printf("<native fn>");
+    break;
+  case OBJ_CLOSURE:
+    printFunction(AS_CLOSURE(value)->function);
+    break;
+  case OBJ_UPVALUE:
+    printf("upvalue");
+    break;
+  case OBJ_ARRAY:
+    printArray(&AS_ARRAY(value)->array);
     break;
   }
 }

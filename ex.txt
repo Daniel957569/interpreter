@@ -1,7 +1,9 @@
-fun x() {
-for (var i = 0; i < 10; i++) {
-    print i;
-} 
+
+fun y() {
+var x = [1, 2, 3, 4 ,5];
+for (var i = 0; i < arrSize(x); i++) {
+    print x[i];
+}
 }
 
-x();
+y();

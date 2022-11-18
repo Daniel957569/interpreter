@@ -2,7 +2,9 @@
 
 #include "chunk.h"
 #include "common.h"
+
 #include "compiler.h"
+#include "memory.h"
 #include "object.h"
 #include "scanner.h"
 #include "value.h"
@@ -24,7 +26,6 @@ static void BYTE_TO_BITS(int byte) {
   char byte7 = (byte & 0x06) ? printf("%c", '1') : printf("%c", '0');
   char byte8 = (byte & 0x04) ? printf("%c", '1') : printf("%c", '0');
   char byte9 = (byte & 0x02) ? printf("%c", '1') : printf("%c", '0');
-
   printf("\n");
 }
 
@@ -53,7 +54,13 @@ typedef struct {
   Token name;
   int depth;
   Type type;
+  bool isCaptured;
 } Local;
+
+typedef struct {
+  uint8_t index;
+  bool isLocal;
+} Upvalue;
 
 typedef struct {
   int arg;
@@ -72,6 +79,7 @@ typedef struct Compiler {
   FunctionType type;
   Local locals[UINT8_COUNT];
   int localCount;
+  Upvalue upvalues[UINT8_COUNT];
   int scopeDepth;
 } Compiler;
 
@@ -85,10 +93,15 @@ typedef struct {
 Parser parser;
 Compiler *current = NULL;
 Chunk *compilingChunk;
+
+Chunk arrayChunk;
 int hasBreak = 0;
 int hasContinue = 0;
+bool isArray = false;
 
-static Chunk *currentChunk() { return &current->function->chunk; }
+static Chunk *currentChunk() {
+  return (isArray) ? &arrayChunk : &current->function->chunk;
+}
 
 static void errorAt(Token *token, const char *message) {
   if (parser.panicMode)
@@ -148,6 +161,10 @@ static void emitByte(uint8_t byte) {
   writeChunk(currentChunk(), byte, parser.previous.line);
 }
 
+static void getArrayItem(uint8_t byte) {
+  writeChunk(&arrayChunk, byte, parser.previous.line);
+}
+
 static void emitBytes(uint8_t byte1, uint8_t byte2) {
   emitByte(byte1);
   emitByte(byte2);
@@ -178,6 +195,7 @@ static void emitReturn() {
 
 static uint8_t makeConstant(Value value) {
   int constant = addConstant(currentChunk(), value);
+
   if (constant > UINT8_MAX) {
     error("Too many constants in one chunk.");
     return 0;
@@ -196,7 +214,6 @@ static void patchJump(int offest, int type) {
   int jump = (type == 0) ? currentChunk()->count - offest - 2
                          : currentChunk()->count - offest + 2;
 
-  printf("ddd%d\n", jump);
   if (jump > UINT16_MAX) {
     error("Too much code to jump over");
   }
@@ -220,6 +237,7 @@ static void initCompiler(Compiler *compiler, FunctionType type) {
 
   Local *local = &current->locals[current->localCount++];
   local->depth = 0;
+  local->isCaptured = false;
   local->name.start = "";
   local->name.length = 0;
   local->type = NONE;
@@ -248,7 +266,11 @@ static void endScope() {
 
   while (current->localCount > 0 &&
          current->locals[current->localCount - 1].depth > current->scopeDepth) {
-    times++;
+    if (current->locals[current->localCount - 1].isCaptured) {
+      emitByte(OP_CLOSE_UPVALUE);
+    } else {
+      times++;
+    }
     current->localCount--;
   }
   emitBytes(OP_POPN, makeConstant(NUMBER_VAL(times)));
@@ -295,6 +317,44 @@ static resolveTuple resolveLocal(Compiler *compiler, Token *name) {
   return createTuple(-1, NONE, NULL);
 }
 
+static int addUpvalue(Compiler *compiler, uint8_t index, bool isLocal) {
+  int upvalueCount = compiler->function->upvalueCount;
+
+  for (int i = 0; i < upvalueCount; i++) {
+    Upvalue *upvalue = &compiler->upvalues[i];
+    if (upvalue->index == index && upvalue->isLocal == isLocal) {
+      return i;
+    }
+  }
+
+  if (upvalueCount == UINT8_COUNT) {
+    error("Too many closure variables in function.");
+    return 0;
+  }
+
+  compiler->upvalues[upvalueCount].isLocal = isLocal;
+  compiler->upvalues[upvalueCount].index = index;
+  return compiler->function->upvalueCount++;
+}
+
+static int resolveUpvalue(Compiler *compiler, Token *name) {
+  if (compiler->enclosing == NULL)
+    return -1;
+
+  int local = resolveLocal(compiler->enclosing, name).arg;
+  if (local != -1) {
+    compiler->enclosing->locals[local].isCaptured = true;
+    return addUpvalue(compiler, (uint8_t)local, true);
+  }
+
+  int upvalue = resolveUpvalue(compiler->enclosing, name);
+  if (upvalue != -1) {
+    return addUpvalue(compiler, (uint8_t)upvalue, false);
+  }
+
+  return -1;
+}
+
 static void addLocal(Token name, Type type) {
   if (current->localCount == UINT8_COUNT) {
     error("Too many local variables in function.");
@@ -304,6 +364,7 @@ static void addLocal(Token name, Type type) {
   Local *local = &current->locals[current->localCount++];
   local->name = name;
   local->depth = -1;
+  local->isCaptured = false;
   local->type = type;
 }
 
@@ -423,6 +484,12 @@ static void call(bool canAssign) {
   emitBytes(OP_CALL, argCount);
 }
 
+/* static void indexArray(bool canAssign) { */
+/*   expression(); */
+/*   consume(TOKEN_RIGHT_BRACKET, "Expect ']' after indexed array"); */
+/*   emitByte(OP_INDEX); */
+/* } */
+
 static void literal(bool canAssign) {
   switch (parser.previous.type) {
   case TOKEN_FALSE:
@@ -466,34 +533,136 @@ static void string(bool canAssign) {
       copyString(parser.previous.start + 1, parser.previous.length - 2)));
 }
 
-static void namedVariable(Token name, bool canAssign) {
-  uint8_t getOp, setOp;
-  resolveTuple tuple = resolveLocal(current, &name);
-  if (tuple.arg != -1) {
-    getOp = OP_GET_LOCAL;
-    setOp = OP_SET_LOCAL;
-  } else {
-    tuple.arg = identifierConstant(&name);
-    getOp = OP_GET_GLOBAL;
-    setOp = OP_SET_GLOBAL;
+static void array(bool canAssign) {
+  ValueArray array;
+  initValueArray(&array);
+  int term = arrayChunk.constants.count;
+  int count = term;
+  isArray = true;
+
+  if (!check(TOKEN_RIGHT_BRACKET)) {
+    do {
+      expression();
+      count++;
+    } while (match(TOKEN_COMMA));
   }
+  isArray = false;
+  consume(TOKEN_RIGHT_BRACKET, "Expect ']' after array initialization");
+  for (int i = term; i < count; i++) {
+    writeValueArray(&array, arrayChunk.constants.values[i]);
+  }
+  ObjArray *arr = newArray(array);
+  emitConstant(OBJ_VAL(arr));
+  freeChunk(&arrayChunk);
+  void *_ = realloc(array.values, 0);
+}
 
-  if (match(TOKEN_PLUS) && match(TOKEN_PLUS)) {
-    if (tuple.type == CONST) {
-      errorAt(tuple.name, "Cannot mutate constant variable");
-    }
+void static binaryEqualHelper(uint8_t setOp, uint8_t getOp, OpCode opcode,
+                              resolveTuple tuple) {
+  emitBytes(getOp, (uint8_t)tuple.arg);
+  expression();
+  emitByte(opcode);
+  emitBytes(setOp, (uint8_t)tuple.arg);
+  emitByte(OP_POP);
+}
 
+void static binaryEqual(int type, uint8_t getOp, uint8_t setOp,
+                        resolveTuple tuple) {
+  if (tuple.type == CONST) {
+    errorAt(tuple.name, "Cannot mutate constant variable");
+  }
+  switch (type) {
+  // add ,plus
+  case 0:
+    binaryEqualHelper(setOp, getOp, OP_ADD, tuple);
+    break;
+  // minus
+  case 1:
+    binaryEqualHelper(setOp, getOp, OP_SUBTRACT, tuple);
+    break;
+  // MULTIPLY
+  case 2:
+    binaryEqualHelper(setOp, getOp, OP_MULTIPLY, tuple);
+    break;
+  // DIVIDE
+  case 3:
+    binaryEqualHelper(setOp, getOp, OP_DIVIDE, tuple);
+    break;
+  // add ,plus
+  case 4:
     emitBytes(getOp, (uint8_t)tuple.arg);
     emitConstant(NUMBER_VAL(1));
     emitByte(OP_ADD);
     emitBytes(setOp, (uint8_t)tuple.arg);
-  } else if (canAssign && match(TOKEN_EQUAL)) {
+    break;
+  }
+}
+
+static void namedVariable(Token name, bool canAssign) {
+  uint8_t getOp, setOp;
+  resolveTuple tuple = resolveLocal(current, &name);
+  if (tuple.arg != -1) {
+    if (check(TOKEN_LEFT_BRACKET)) {
+      getOp = OP_INDEX_LOCAL;
+      setOp = OP_SET_ARRAY_LOCAL;
+    } else {
+      getOp = OP_GET_LOCAL;
+      setOp = OP_SET_LOCAL;
+    }
+  } else if ((tuple.arg = resolveUpvalue(current, &name)) != -1) {
+    getOp = OP_GET_UPVALUE;
+    setOp = OP_SET_UPVALUE;
+  } else {
+    if (check(TOKEN_LEFT_BRACKET)) {
+      tuple.arg = identifierConstant(&name);
+      getOp = OP_INDEX_GLOBAL;
+      setOp = OP_SET_ARRAY_GLOBAL;
+    } else {
+      tuple.arg = identifierConstant(&name);
+      getOp = OP_GET_GLOBAL;
+      setOp = OP_SET_GLOBAL;
+    }
+  }
+
+  if (canAssign && match(TOKEN_PLUS_EQUAL)) {
+    binaryEqual(0, getOp, setOp, tuple);
+    return;
+  }
+  if (canAssign && match(TOKEN_MINUS_EQUAL)) {
+    binaryEqual(1, getOp, setOp, tuple);
+    return;
+  }
+  if (canAssign && match(TOKEN_STAR_EQUAL)) {
+    binaryEqual(2, getOp, setOp, tuple);
+    return;
+  }
+  if (canAssign && match(TOKEN_SLASH)) {
+    binaryEqual(3, getOp, setOp, tuple);
+    return;
+  }
+  if (canAssign && match(TOKEN_PLUS_PLUS)) {
+    binaryEqual(4, getOp, setOp, tuple);
+    return;
+  }
+
+  if (match(TOKEN_LEFT_BRACKET)) {
+    expression();
+    consume(TOKEN_RIGHT_BRACKET, "Expect ']' after indexing array");
+    if (match(TOKEN_EQUAL)) {
+      expression();
+      emitBytes(setOp, (uint8_t)tuple.arg);
+    } else {
+      emitBytes(getOp, (uint8_t)tuple.arg);
+    }
+    return;
+  }
+
+  if (canAssign && match(TOKEN_EQUAL)) {
     if (tuple.type == CONST) {
       errorAt(tuple.name, "Cannot mutate constant variable");
     }
     expression();
     emitBytes(setOp, (uint8_t)tuple.arg);
-
   } else {
     emitBytes(getOp, (uint8_t)tuple.arg);
   }
@@ -527,6 +696,8 @@ ParseRule rules[] = {
     [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_BRACKET] = {array, NULL, PREC_CALL},
+    [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
     [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
     [TOKEN_DOT] = {NULL, NULL, PREC_NONE},
     [TOKEN_MINUS] = {unary, binary, PREC_TERM},
@@ -579,6 +750,7 @@ static void parsePrecedence(Precedence precedence) {
   while (precedence <= getRule(parser.current.type)->precedence) {
     advance();
     ParseFn infixRule = getRule(parser.previous.type)->infix;
+
     infixRule(canAssign);
   }
 
@@ -621,7 +793,12 @@ static void function(FunctionType type) {
   block();
 
   ObjFunction *function = endCompiler();
-  emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
+  emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(function)));
+
+  for (int i = 0; i < function->upvalueCount; i++) {
+    emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
+    emitByte(compiler.upvalues[i].index);
+  }
 }
 
 static void funDeclaration() {
