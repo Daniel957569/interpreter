@@ -309,9 +309,9 @@ static resolveTuple resolveLocal(Compiler *compiler, Token *name) {
       return createTuple(i, local->type, &local->name);
     }
 
-    /* if (local->depth == -1) { */
-    /*   error("Can't read local variable in its own initializer."); */
-    /* } */
+    if (local->depth == -1) {
+      error("Can't read local variable in its own initializer.");
+    }
   }
 
   return createTuple(-1, NONE, NULL);
@@ -554,7 +554,6 @@ static void array(bool canAssign) {
   ObjArray *arr = newArray(array);
   emitConstant(OBJ_VAL(arr));
   freeChunk(&arrayChunk);
-  void *_ = realloc(array.values, 0);
 }
 
 void static binaryEqualHelper(uint8_t setOp, uint8_t getOp, OpCode opcode,
@@ -563,7 +562,6 @@ void static binaryEqualHelper(uint8_t setOp, uint8_t getOp, OpCode opcode,
   expression();
   emitByte(opcode);
   emitBytes(setOp, (uint8_t)tuple.arg);
-  emitByte(OP_POP);
 }
 
 void static binaryEqual(int type, uint8_t getOp, uint8_t setOp,
@@ -1059,4 +1057,12 @@ ObjFunction *compile(const char *source) {
 
   ObjFunction *function = endCompiler();
   return parser.hadError ? NULL : function;
+}
+
+void markCompilerRoots() {
+  Compiler *compiler = current;
+  while (compiler != NULL) {
+    markObject((Obj *)compiler->function);
+    compiler = compiler->enclosing;
+  }
 }

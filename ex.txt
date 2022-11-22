@@ -1,9 +1,10 @@
 
 fun y() {
-var x = [1, 2, 3, 4 ,5];
-for (var i = 0; i < arrSize(x); i++) {
-    print x[i];
-}
+    var x = "h";
+    for (var i = 0; i < 20; i++) {
+        x += "h";
+    }
+    print x;
 }
 
 y();

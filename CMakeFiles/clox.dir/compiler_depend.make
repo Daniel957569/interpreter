@@ -304,18 +304,20 @@ CMakeFiles/clox.dir/memory.c.o: memory.c \
   /usr/include/x86_64-linux-gnu/bits/struct_rwlock.h \
   /usr/include/alloca.h \
   /usr/include/x86_64-linux-gnu/bits/stdlib-float.h \
-  memory.h \
+  compiler.h \
+  object.h \
+  chunk.h \
   common.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdbool.h \
   /usr/lib/gcc/x86_64-linux-gnu/11/include/stdint.h \
   /usr/include/stdint.h \
   /usr/include/x86_64-linux-gnu/bits/wchar.h \
   /usr/include/x86_64-linux-gnu/bits/stdint-uintn.h \
-  object.h \
-  chunk.h \
   value.h \
   vm.h \
-  table.h
+  table.h \
+  memory.h \
+  debug.h
 
 CMakeFiles/clox.dir/object.c.o: object.c \
   /usr/include/stdc-predef.h \
