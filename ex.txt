@@ -1,11 +1,15 @@
-
-var start = clock();
-var h = "h";
-for (var i =0; i < 10000; i++) {
-    h += "h";
-    print i;
+fun x() {
+    var x = 0;
+    var y = 0;
+    while (x < 100) {
+        if (x == 5) {
+            y++;
+            continue;
+        }
+        x++;
+        print y;
+    }
+    print "done";
 }
 
-print clock() - start;
-
-
+x();

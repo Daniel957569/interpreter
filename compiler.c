@@ -96,7 +96,7 @@ Chunk *compilingChunk;
 
 Chunk arrayChunk;
 int hasBreak = 0;
-int hasContinue = 0;
+bool hasContinue = false;
 bool isArray = false;
 
 static Chunk *currentChunk() {
@@ -852,6 +852,12 @@ static void whileStatement() {
     patchJump(hasBreak, 1);
     hasBreak = 0;
   }
+
+  if (hasContinue != 0) {
+    patchJump(exitJump, 1);
+    hasContinue = false;
+  }
+
   emitLoop(loopStart);
 
   patchJump(exitJump, 0);
@@ -964,6 +970,10 @@ static void forStatement() {
     patchJump(hasBreak, 1);
     hasBreak = 0;
   }
+  if (hasContinue) {
+    patchJump(loopStart, 1);
+    hasContinue = false;
+  }
   emitLoop(loopStart);
 
   if (exitJump != -1) {
@@ -994,6 +1004,11 @@ static void ifStatement() {
 
 static void breakStatement() {
   hasBreak = emitJump(OP_JUMP);
+  consume(TOKEN_SEMICOLON, "Expect ';' after break statement");
+}
+
+static void continueStatement() {
+  hasContinue = true;
   consume(TOKEN_SEMICOLON, "Expect ';' after break statement");
 }
 
@@ -1051,6 +1066,7 @@ static void statement() {
   } else if (match(TOKEN_CONTINUE)) {
     /* TODO CONTINUE; */
     printf("/* TODO:  <12-11-22, daniel> todo continue statement*/");
+    continueStatement();
   } else if (match(TOKEN_WHILE)) {
     whileStatement();
   } else if (match(TOKEN_FOR)) {

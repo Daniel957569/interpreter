@@ -1,10 +1,5 @@
-<<<<<<< HEAD
-cmake_minimum_required(VERSION 3.5.2)
-project(clox C)
-=======
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.5.1)
 project(lol C)
->>>>>>> 7ddefa92157ccbf8f4fb21fe3f322cbad0801b13
 
 set(CMAKE_C_STANDARD 99)
 
