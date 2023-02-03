@@ -35,11 +35,21 @@ void *reallocate(void *pointer, size_t oldSize, size_t newSize) {
 }
 
 static void freeObject(Obj *object) {
-#ifdef DEBUG_LOG_GC
-  printf("%p free type %d\n", (void *)object, object->type);
-#endif
+  /* #ifdef DEBUG_LOG_GC */
+  /*   printf("%p free type %d\n", (void *)object, object->type); */
+  /* #endif */
 
   switch (object->type) {
+  case OBJ_INSTANCE: {
+    ObjInstance *instance = (ObjInstance *)object;
+    freeTable(&instance->fields);
+    FREE(ObjInstance, object);
+    break;
+  }
+  case OBJ_CLASS: {
+    FREE(ObjClass, object);
+    break;
+  }
   case OBJ_STRING: {
     ObjString *string = (ObjString *)object;
     FREE_ARRAY(char, string->chars, string->length + 1);
@@ -134,6 +144,17 @@ static void blackenObject(Obj *object) {
 #endif
 
   switch (object->type) {
+  case OBJ_INSTANCE: {
+    ObjInstance *instance = (ObjInstance *)object;
+    markObject((Obj *)instance->klass);
+    markTable(&instance->fields);
+    break;
+  }
+  case OBJ_CLASS: {
+    ObjClass *klass = (ObjClass *)object;
+    markObject((Obj *)klass->name);
+    break;
+  }
   case OBJ_UPVALUE:
     markValue(((ObjUpvalue *)object)->closed);
     break;
@@ -190,23 +211,23 @@ static void sweep() {
 }
 
 void collectGarbage() {
-#ifdef DEBUG_LOG_GC
-  printf("-- gc begin\n");
-#endif
-  size_t before = vm.bytesAllocated;
+  /* #ifdef DEBUG_LOG_GC */
+  /*   printf("-- gc begin\n"); */
+  /* #endif */
+  /*   size_t before = vm.bytesAllocated; */
 
-  markRoots();
-  traceReferences();
-  tableRemoveWhite(&vm.strings);
-  sweep();
+  /*   markRoots(); */
+  /*   traceReferences(); */
+  /*   tableRemoveWhite(&vm.strings); */
+  /*   sweep(); */
 
-  vm.nextGC = vm.bytesAllocated * GC_HEAP_GROW_FACTOR;
-#ifdef DEBUG_LOG_GC
-  printf("-- gc end\n");
-  printf("  collected %zu bytes (from %zu tp %zu) next at %zu\n",
-         before - vm.bytesAllocated, before, vm.bytesAllocated,
-         vm.bytesAllocated);
-#endif
+  /*   vm.nextGC = vm.bytesAllocated * GC_HEAP_GROW_FACTOR; */
+  /* #ifdef DEBUG_LOG_GC */
+  /*   printf("-- gc end\n"); */
+  /*   printf("  collected %zu bytes (from %zu tp %zu) next at %zu\n", */
+  /*          before - vm.bytesAllocated, before, vm.bytesAllocated, */
+  /*          vm.bytesAllocated); */
+  /* #endif */
 }
 
 void freeObjects() {

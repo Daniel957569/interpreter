@@ -1,10 +1,11 @@
 
-fun y() {
-    var x = "h";
-    for (var i = 0; i < 20; i++) {
-        x += "h";
-    }
-    print x;
+var start = clock();
+var h = "h";
+for (var i =0; i < 10000; i++) {
+    h += "h";
+    print i;
 }
 
-y();
+print clock() - start;
+
+

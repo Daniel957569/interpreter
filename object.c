@@ -35,6 +35,19 @@ static ObjString *allocateString(char *chars, int length, uint32_t hash) {
   return string;
 }
 
+ObjInstance *newInstance(ObjClass *klass) {
+  ObjInstance *instance = ALLOCATE_OBJ(ObjInstance, OBJ_INSTANCE);
+  instance->klass = klass;
+  initTable(&instance->fields);
+  return instance;
+}
+
+ObjClass *newClass(ObjString *name) {
+  ObjClass *klass = ALLOCATE_OBJ(ObjClass, OBJ_CLASS);
+  klass->name = name;
+  return klass;
+}
+
 ObjUpvalue *newUpvalue(Value *slot) {
   ObjUpvalue *upvalue = ALLOCATE_OBJ(ObjUpvalue, OBJ_UPVALUE);
   upvalue->location = slot;
@@ -146,6 +159,12 @@ void printObject(Value value) {
     break;
   case OBJ_ARRAY:
     printArray(&AS_ARRAY(value)->array);
+    break;
+  case OBJ_CLASS:
+    printf("%s", AS_CLASS(value)->name->chars);
+    break;
+  case OBJ_INSTANCE:
+    printf("%s instance", AS_INSTANCE(value)->klass->name->chars);
     break;
   }
 }

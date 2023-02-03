@@ -28,6 +28,8 @@ typedef enum {
   OP_DEFINE_GLOBAL_VAR,
   OP_GET_GLOBAL,
   OP_SET_GLOBAL,
+  OP_GET_PROPERTY,
+  OP_SET_PROPERTY,
   OP_GET_LOCAL,
   OP_SET_LOCAL,
   OP_SET_ARRAY_LOCAL,
@@ -43,6 +45,7 @@ typedef enum {
   OP_GET_UPVALUE,
   OP_SET_UPVALUE,
   OP_CLOSE_UPVALUE,
+  OP_CLASS,
 } OpCode;
 
 typedef struct {
